@@ -1,0 +1,9 @@
+streamlit==1.25.0
+yfinance==0.2.29
+pandas==2.2.3
+numpy==1.26.4
+plotly==5.20.0
+pyngrok==6.0.0    # optional: for Colab sharing
+APScheduler==3.10.1
+python-dotenv==1.0.0
+requests==2.31.0
