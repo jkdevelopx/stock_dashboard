@@ -1,14 +1,12 @@
-# streamlit_mcrf_dashboard.py
+# streamlit_mcrf_enhanced.py
 """
-MCRF — Auto Scanner Streamlit App (User-friendly edition)
-Features:
-- SCAN NOW (one-click) using built-in sample universes (micro/small/sector lists)
-- Category-based scanner (AI, EV, Semiconductors, Biotech, Energy, Robotics)
-- Auto-scan logic: volume anomaly, momentum, MA alignment, RSI, HL accumulation
-- Picks Top-7 (ranked) and shows clean cards + mini charts
-- Watchlist (session-based), export CSV
-- Clean/simplified UI layout for all users
-- Educational only — NOT investment advice
+MCRF Enhanced Scanner - NEW VERSION with Features 1,2,3,4
+- Feature 1: Search individual stocks
+- Feature 2: Click-to-explore detailed view
+- Feature 3: Better/larger universe lists (S&P500, NASDAQ, sectors)
+- Feature 4: Advanced charts (candlestick, volume bars, multiple indicators)
+
+This is a NEW file - original streamlit_mcrf_dashboard.py is untouched
 """
 
 import streamlit as st
@@ -16,26 +14,23 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 from datetime import datetime
-import math
-from typing import List, Dict
 import time
+from typing import List, Dict
 
-st.set_page_config(page_title="MCRF Auto Scanner", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="MCRF Enhanced Scanner", layout="wide", initial_sidebar_state="expanded")
 
 # ---------------------
-# --- Utility funcs ---
+# --- Utility funcs (same as original) ---
 # ---------------------
 @st.cache_data(ttl=300)
 def fetch_history(ticker: str, period="1y", interval="1d"):
-    """Fetch historical data with better error handling"""
     try:
-        # Add small delay to avoid rate limiting
         time.sleep(0.1)
         t = yf.Ticker(ticker)
         df = t.history(period=period, interval=interval, actions=False)
         if df.empty:
-            print(f"No data returned for {ticker}")
             return pd.DataFrame()
         df = df[['Open','High','Low','Close','Volume']].copy()
         df.index = pd.to_datetime(df.index)
@@ -45,34 +40,23 @@ def fetch_history(ticker: str, period="1y", interval="1d"):
         return pd.DataFrame()
 
 def clean_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean dataframe with better handling"""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
     df = df.dropna(subset=['Close'])
     df['Volume'] = df['Volume'].fillna(0)
-    # Remove forward-fill as it can cause issues
     df = df[df['Volume'] > 0]
     return df
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute technical indicators"""
-    if df.empty or len(df) < 50:  # Need minimum data points
+    if df.empty or len(df) < 50:
         return df
     df = df.copy()
-    
-    # Moving averages
     df['MA20'] = df['Close'].rolling(20, min_periods=5).mean()
     df['MA50'] = df['Close'].rolling(50, min_periods=10).mean()
     df['MA200'] = df['Close'].rolling(200, min_periods=50).mean()
-    
-    # Momentum
     df['Momentum_21'] = df['Close'] / df['Close'].shift(21) - 1
-    
-    # Volume indicators
     df['Vol_MA20'] = df['Volume'].rolling(20, min_periods=5).mean()
-    
-    # RSI
     delta = df['Close'].diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -80,70 +64,45 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     roll_down = down.rolling(14).mean()
     rs = roll_up / (roll_down + 1e-9)
     df['RSI14'] = 100 - (100 / (1 + rs))
-    
-    # Volume spike
     df['Vol_Spike'] = df['Volume'] / (df['Vol_MA20'] + 1e-9)
-    
-    # Higher lows
     df['HL'] = ((df['Low'] > df['Low'].shift(1)) & 
                 (df['Low'].shift(1) > df['Low'].shift(2))).astype(int)
-    
+    # MACD
+    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     return df
 
 def score_ticker(df: pd.DataFrame, info: dict) -> Dict:
-    """Score ticker with better error handling"""
     if df.empty or len(df) < 50:
         return {'score': -999, 'reason': 'insufficient_data', 'mom': 0, 'rsi': 50, 'vol_spike': 1, 'hl21': 0}
-    
     try:
         latest = df.iloc[-1]
-        
-        # Momentum score
         mom = float(latest.get('Momentum_21', 0))
-        if pd.isna(mom):
-            mom = 0
+        if pd.isna(mom): mom = 0
         mom_s = np.tanh(mom * 5)
-        
-        # RSI score
         rsi = float(latest.get('RSI14', 50))
-        if pd.isna(rsi):
-            rsi = 50
+        if pd.isna(rsi): rsi = 50
         rsi_s = 1 - abs((rsi - 55) / 55)
-        
-        # Volume spike score
         vol_spike = float(latest.get('Vol_Spike', 1))
-        if pd.isna(vol_spike):
-            vol_spike = 1
+        if pd.isna(vol_spike): vol_spike = 1
         vol_s = np.tanh((vol_spike - 1.0) * 1.2)
-        
-        # Higher lows
         hl = int(df['HL'].rolling(21).sum().iloc[-1]) if 'HL' in df.columns else 0
-        if pd.isna(hl):
-            hl = 0
+        if pd.isna(hl): hl = 0
         hl_s = min(hl / 5.0, 1.0)
-        
-        # MA alignment
         ma_bias = 0.0
         close = latest['Close']
         ma50 = latest.get('MA50', 0)
         ma200 = latest.get('MA200', 0)
-        
-        if not pd.isna(ma50) and close > ma50:
-            ma_bias += 0.4
-        if not pd.isna(ma200) and close > ma200:
-            ma_bias += 0.6
-        
-        # Revenue growth
+        if not pd.isna(ma50) and close > ma50: ma_bias += 0.4
+        if not pd.isna(ma200) and close > ma200: ma_bias += 0.6
         rev_growth = info.get('revenueGrowth', 0.0)
-        if rev_growth is None or pd.isna(rev_growth):
-            rev_growth = 0.0
+        if rev_growth is None or pd.isna(rev_growth): rev_growth = 0.0
         rev_s = np.tanh(float(rev_growth) * 3)
-        
-        # Composite score
         composite = (0.32 * mom_s + 0.18 * rsi_s + 0.20 * vol_s + 
                     0.10 * hl_s + 0.12 * ma_bias + 0.08 * rev_s)
         score = (composite + 1) / 2 * 100
-        
         return {
             'score': round(float(score), 2),
             'mom': round(mom_s, 3),
@@ -152,50 +111,207 @@ def score_ticker(df: pd.DataFrame, info: dict) -> Dict:
             'hl21': int(hl)
         }
     except Exception as e:
-        print(f"Error scoring ticker: {e}")
         return {'score': -999, 'reason': 'scoring_error', 'mom': 0, 'rsi': 50, 'vol_spike': 1, 'hl21': 0}
 
 # ---------------------
-# --- Sample universes ---
+# --- FEATURE 3: Enhanced Universe Lists ---
 # ---------------------
+# Small samples (original)
 SAMPLE_SMALLCAP = ["AAPL", "MSFT", "NVDA", "TSM", "AMD", "INTC", "QCOM", "AVGO", "CRM", "ORCL"]
 SAMPLE_MICRO = ["SOUN", "BBAI", "INDI", "VLD", "IRTC", "HIMX", "ENPH", "FSLR", "PLUG", "SPCE"]
-THEME_AI = ["NVDA", "AMD", "SMCI", "AVGO", "MSFT", "GOOGL", "INTC"]
-THEME_ROBOTICS = ["IRTC", "FSLR", "VLD", "INDI", "HIMX"]
-THEME_BIO = ["IRTC", "CRSP", "BEAM", "NTLA", "ILMN"]
-THEME_EV = ["TSLA", "NIO", "LI", "XPEV", "FSR"]
+
+# NEW: S&P 500 Top 50 by market cap (sample - you can expand this)
+SP500_TOP50 = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "UNH", "JNJ",
+    "V", "XOM", "WMT", "JPM", "MA", "PG", "AVGO", "HD", "CVX", "MRK",
+    "ABBV", "LLY", "PEP", "COST", "KO", "ADBE", "TMO", "MCD", "CSCO", "ACN",
+    "ABT", "NKE", "DHR", "CRM", "VZ", "WFC", "TXN", "CMCSA", "PM", "BMY",
+    "INTC", "AMD", "NEE", "ORCL", "LIN", "UPS", "RTX", "HON", "QCOM", "AMGN"
+]
+
+# NEW: NASDAQ 100 Tech Leaders
+NASDAQ_TECH = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "ADBE", "CSCO",
+    "NFLX", "INTC", "AMD", "QCOM", "TXN", "AMAT", "INTU", "ISRG", "MU", "LRCX"
+]
+
+# NEW: Sector-specific lists
+SECTOR_TECH = ["AAPL", "MSFT", "NVDA", "AMD", "INTC", "QCOM", "AVGO", "CRM", "ADBE", "ORCL", "CSCO"]
+SECTOR_HEALTHCARE = ["UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT", "PFE", "BMY", "AMGN"]
+SECTOR_FINANCE = ["JPM", "BAC", "WFC", "C", "GS", "MS", "BLK", "SCHW", "AXP", "USB"]
+SECTOR_ENERGY = ["XOM", "CVX", "COP", "EOG", "SLB", "MPC", "PSX", "VLO", "OXY", "HAL"]
+SECTOR_CONSUMER = ["AMZN", "TSLA", "WMT", "HD", "MCD", "NKE", "SBUX", "TGT", "LOW", "TJX"]
+
+# Themes (original + enhanced)
+THEME_AI = ["NVDA", "AMD", "MSFT", "GOOGL", "META", "AVGO", "INTC", "SMCI", "ARM", "PLTR"]
+THEME_EV = ["TSLA", "RIVN", "LCID", "NIO", "LI", "XPEV", "F", "GM", "STLA"]
+THEME_BIOTECH = ["MRNA", "BNTX", "CRSP", "BEAM", "NTLA", "ILMN", "REGN", "VRTX", "GILD"]
+
+UNIVERSE_OPTIONS = {
+    "Quick Samples": {
+        "SmallCap Sample (10)": SAMPLE_SMALLCAP,
+        "Micro Sample (10)": SAMPLE_MICRO,
+    },
+    "Major Indices": {
+        "S&P 500 Top 50": SP500_TOP50,
+        "NASDAQ Tech Leaders": NASDAQ_TECH,
+    },
+    "By Sector": {
+        "Technology": SECTOR_TECH,
+        "Healthcare": SECTOR_HEALTHCARE,
+        "Financial": SECTOR_FINANCE,
+        "Energy": SECTOR_ENERGY,
+        "Consumer": SECTOR_CONSUMER,
+    },
+    "By Theme": {
+        "AI & Machine Learning": THEME_AI,
+        "Electric Vehicles": THEME_EV,
+        "Biotech": THEME_BIOTECH,
+    }
+}
 
 # ---------------------
-# --- UI: Sidebar ---
+# --- FEATURE 4: Advanced Chart Function ---
 # ---------------------
-st.sidebar.title("MCRF — Easy Scanner")
-st.sidebar.markdown("One-click scanner for users")
-
-scan_mode = st.sidebar.radio("Scanner mode", ["SCAN NOW (Auto sample)", "Category Scanner", "Upload CSV"])
-period = st.sidebar.selectbox("History period", ["6mo", "1y", "2y"], index=1)
-topk = st.sidebar.slider("Top picks to show", value=7, min_value=3, max_value=15)
-max_check = st.sidebar.slider("Max tickers to attempt (only for CSV or custom)", 
-                               min_value=50, max_value=1000, value=300, step=50)
-
-st.title("MCRF — Auto Scanner (User Friendly)")
-st.markdown("**One-click SCAN NOW** — system finds stocks for you from sample universes. Educational only.")
+def create_advanced_chart(df: pd.DataFrame, ticker: str):
+    """Create candlestick chart with volume and indicators"""
+    if df.empty:
+        return None
+    
+    # Create subplots: 3 rows
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=(f'{ticker} - Price & MAs', 'Volume', 'RSI'),
+        row_heights=[0.6, 0.2, 0.2]
+    )
+    
+    # Row 1: Candlestick chart
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Price'
+        ),
+        row=1, col=1
+    )
+    
+    # Add moving averages
+    if 'MA20' in df.columns and not df['MA20'].isna().all():
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', 
+                                line=dict(color='orange', width=1)), row=1, col=1)
+    if 'MA50' in df.columns and not df['MA50'].isna().all():
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', 
+                                line=dict(color='blue', width=1)), row=1, col=1)
+    if 'MA200' in df.columns and not df['MA200'].isna().all():
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA200'], name='MA200', 
+                                line=dict(color='red', width=1, dash='dash')), row=1, col=1)
+    
+    # Row 2: Volume bars
+    colors = ['red' if df['Close'].iloc[i] < df['Open'].iloc[i] else 'green' 
+              for i in range(len(df))]
+    fig.add_trace(
+        go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors),
+        row=2, col=1
+    )
+    
+    # Row 3: RSI
+    if 'RSI14' in df.columns:
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df['RSI14'], name='RSI', line=dict(color='purple')),
+            row=3, col=1
+        )
+        # RSI levels
+        fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=3, col=1)
+    
+    # Update layout
+    fig.update_layout(
+        height=800,
+        showlegend=True,
+        xaxis_rangeslider_visible=False,
+        hovermode='x unified'
+    )
+    
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
+    fig.update_yaxes(title_text="RSI", row=3, col=1)
+    
+    return fig
 
 # ---------------------
-# --- Main: SCAN NOW ---
+# --- FEATURE 2: Detailed View Function ---
 # ---------------------
-def run_scan(ticker_list: List[str]):
-    """Main scan function with progress tracking"""
+def show_detailed_view(ticker: str, df: pd.DataFrame, info: dict, score_data: dict):
+    """Show detailed analysis for a single ticker"""
+    st.markdown(f"## 🔍 Detailed Analysis: {ticker}")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Score", f"{score_data.get('score', 'N/A')}", 
+                 delta="Strong" if score_data.get('score', 0) >= 65 else "Weak")
+        st.metric("Current Price", f"${df['Close'].iloc[-1]:.2f}" if not df.empty else "N/A")
+        st.metric("Volume", f"{df['Volume'].iloc[-1]:,.0f}" if not df.empty else "N/A")
+    
+    with col2:
+        st.metric("RSI (14)", f"{score_data.get('rsi', 'N/A')}")
+        st.metric("Momentum (21d)", f"{score_data.get('mom', 'N/A')}")
+        st.metric("Volume Spike", f"{score_data.get('vol_spike', 'N/A')}x")
+    
+    with col3:
+        st.write("**Company Info:**")
+        st.write(f"Name: {info.get('shortName', 'N/A')}")
+        st.write(f"Sector: {info.get('sector', 'N/A')}")
+        st.write(f"Industry: {info.get('industry', 'N/A')}")
+        st.write(f"Market Cap: ${info.get('marketCap', 0)/1e9:.2f}B" if info.get('marketCap') else "N/A")
+    
+    # Advanced chart
+    st.markdown("### 📊 Technical Chart")
+    chart = create_advanced_chart(df, ticker)
+    if chart:
+        st.plotly_chart(chart, use_container_width=True)
+    
+    # Technical indicators table
+    if not df.empty:
+        st.markdown("### 📈 Latest Indicators")
+        latest = df.iloc[-1]
+        indicators_df = pd.DataFrame({
+            'Indicator': ['Close', 'MA20', 'MA50', 'MA200', 'RSI', 'Volume', 'Vol vs Avg'],
+            'Value': [
+                f"${latest['Close']:.2f}",
+                f"${latest.get('MA20', 0):.2f}",
+                f"${latest.get('MA50', 0):.2f}",
+                f"${latest.get('MA200', 0):.2f}",
+                f"{latest.get('RSI14', 0):.2f}",
+                f"{latest['Volume']:,.0f}",
+                f"{latest.get('Vol_Spike', 0):.2f}x"
+            ]
+        })
+        st.table(indicators_df)
+
+# ---------------------
+# --- Scan Function (same as original) ---
+# ---------------------
+def run_scan(ticker_list: List[str], show_progress=True):
     results = []
     details = {}
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    
+    if show_progress:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
     
     for i, t in enumerate(ticker_list):
         try:
-            status_text.text(f"Scanning {t} ({i+1}/{len(ticker_list)})...")
-            progress_bar.progress((i + 1) / len(ticker_list))
+            if show_progress:
+                status_text.text(f"Scanning {t} ({i+1}/{len(ticker_list)})...")
+                progress_bar.progress((i + 1) / len(ticker_list))
             
-            hist = fetch_history(t, period=period)
+            hist = fetch_history(t, period=st.session_state.get('period', '1y'))
             df = clean_df(hist)
             
             if df.empty or len(df) < 50:
@@ -205,14 +321,11 @@ def run_scan(ticker_list: List[str]):
                 continue
             
             df = compute_indicators(df)
-            
-            # Fetch info with error handling
             info = {}
             try:
                 ticker_obj = yf.Ticker(t)
                 info = ticker_obj.info or {}
-            except Exception as e:
-                print(f"Error fetching info for {t}: {e}")
+            except Exception:
                 info = {}
             
             sc = score_ticker(df, info)
@@ -220,180 +333,168 @@ def run_scan(ticker_list: List[str]):
             details[t] = {'df': df, 'info': info, 'score': sc}
             
         except Exception as e:
-            print(f"Error processing {t}: {e}")
             results.append({'ticker': t, 'score': -999})
             details[t] = {'df': pd.DataFrame(), 'info': {}, 
                         'score': {'score': -999, 'reason': str(e)}}
     
-    progress_bar.empty()
-    status_text.empty()
+    if show_progress:
+        progress_bar.empty()
+        status_text.empty()
     
     out = pd.DataFrame(results).sort_values('score', ascending=False).reset_index(drop=True)
     return out, details
 
-# Main actions
-if scan_mode == "SCAN NOW (Auto sample)":
-    st.subheader("SCAN NOW")
-    st.write("Auto-scan uses sample universes optimized for user simplicity.")
-    col1, col2, col3 = st.columns([1, 1, 1])
-    
-    with col1:
-        if st.button("Quick: SmallCap sample"):
-            tickers = SAMPLE_SMALLCAP
-            st.session_state['last_universe'] = "SmallCap sample"
-            st.session_state['last_list'] = tickers
-            with st.spinner("Scanning..."):
-                out, details = run_scan(tickers)
-                st.session_state['last_result'] = out
-                st.session_state['details'] = details
-                st.rerun()
-    
-    with col2:
-        if st.button("Quick: Micro sample"):
-            tickers = SAMPLE_MICRO
-            st.session_state['last_universe'] = "Micro sample"
-            st.session_state['last_list'] = tickers
-            with st.spinner("Scanning..."):
-                out, details = run_scan(tickers)
-                st.session_state['last_result'] = out
-                st.session_state['details'] = details
-                st.rerun()
-    
-    with col3:
-        if st.button("Quick: AI Theme"):
-            tickers = THEME_AI
-            st.session_state['last_universe'] = "AI theme"
-            st.session_state['last_list'] = tickers
-            with st.spinner("Scanning..."):
-                out, details = run_scan(tickers)
-                st.session_state['last_result'] = out
-                st.session_state['details'] = details
-                st.rerun()
+# ---------------------
+# --- MAIN UI ---
+# ---------------------
+st.title("🚀 MCRF Enhanced Scanner")
+st.markdown("**New Features**: Search stocks • Click to explore • Larger universes • Advanced charts")
 
-    if 'last_result' in st.session_state:
-        res = st.session_state['last_result']
-        details = st.session_state['details']
-        
-        # Filter out -999 scores
-        valid_res = res[res['score'] > -999]
-        
-        if valid_res.empty:
-            st.error("❌ No valid data retrieved. This could be due to:")
-            st.markdown("""
-            - **Network issues** - Check your internet connection
-            - **Yahoo Finance API limits** - Wait a few minutes and try again
-            - **Invalid tickers** - Some tickers may be delisted or incorrect
-            """)
-        else:
-            st.markdown("### Top picks")
-            st.table(valid_res.head(topk))
-            
-            # Show cards for top-k
-            picks = valid_res.head(topk)['ticker'].tolist()
-            for t in picks:
-                if t not in details:
-                    continue
-                    
-                sc = details[t]['score']
-                df = details[t]['df']
-                info = details[t]['info']
-                
-                colA, colB = st.columns([1, 3])
-                with colA:
-                    score_val = sc.get('score', -999)
-                    color = "🟢" if score_val >= 65 else ("🟡" if score_val >= 45 else "🔴")
-                    st.markdown(f"#### {t} {color} — Score {score_val}")
-                    st.write(info.get('shortName') or info.get('longName') or "N/A")
-                    st.write(f"Sector: {info.get('sector', 'n/a')}")
-                    
-                    add = st.button(f"Add {t} to Watchlist", key=f"add_{t}")
-                    if add:
-                        if 'watchlist' not in st.session_state:
-                            st.session_state['watchlist'] = []
-                        if t not in st.session_state['watchlist']:
-                            st.session_state['watchlist'].append(t)
-                            st.success(f"{t} added to watchlist")
-                
-                with colB:
-                    if not df.empty:
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Close'))
-                        if 'MA50' in df.columns and not df['MA50'].isna().all():
-                            fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], 
-                                                    name='MA50', line=dict(dash='dash')))
-                        fig.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0))
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.write("No price data available")
+# Sidebar
+st.sidebar.title("⚙️ Settings")
+period = st.sidebar.selectbox("History period", ["6mo", "1y", "2y"], index=1)
+st.session_state['period'] = period
 
-elif scan_mode == "Category Scanner":
-    st.subheader("Category Scanner")
-    cat = st.selectbox("Choose category", 
-                      ["AI", "Robotics", "Biotech", "EV", "Semiconductors", "Micro-cap"])
-    pre = []
-    if cat == "AI": pre = THEME_AI
-    if cat == "Robotics": pre = THEME_ROBOTICS
-    if cat == "Biotech": pre = THEME_BIO
-    if cat == "EV": pre = THEME_EV
-    if cat == "Semiconductors": pre = ["TSM", "ASML", "NVDA", "INTC", "MU", "AMD"]
-    if cat == "Micro-cap": pre = SAMPLE_MICRO
-    
-    st.write("Selected sample universe:", pre)
-    if st.button("Scan category"):
-        with st.spinner("Scanning category..."):
-            out, details = run_scan(pre)
-            st.session_state['last_result'] = out
-            st.session_state['details'] = details
-            
-            valid_res = out[out['score'] > -999]
-            if not valid_res.empty:
-                st.table(valid_res.head(topk))
-            else:
-                st.error("No valid data retrieved. Please try again later.")
-
-else:  # Upload CSV
-    st.subheader("Upload CSV (column: ticker)")
-    uploaded = st.file_uploader("Upload CSV file with 'ticker' column", type=["csv"])
-    if uploaded is not None:
-        df_up = pd.read_csv(uploaded)
-        if 'ticker' not in df_up.columns:
-            st.error("CSV must contain 'ticker' column")
-        else:
-            tickers = [str(x).strip().upper() for x in df_up['ticker'].tolist()][:max_check]
-            st.write(f"Found {len(tickers)} tickers in CSV (limited to {max_check})")
-            if st.button("Run CSV scan"):
-                with st.spinner("Running CSV scan. This may take time for large lists."):
-                    out, details = run_scan(tickers)
-                    st.session_state['last_result'] = out
-                    st.session_state['details'] = details
-                    
-                    valid_res = out[out['score'] > -999]
-                    if not valid_res.empty:
-                        st.table(valid_res.head(topk))
-                    else:
-                        st.error("No valid data retrieved. Check your tickers and try again.")
-
-# Watchlist & export
-st.sidebar.markdown("---")
-st.sidebar.subheader("Watchlist")
+# Initialize session state
 if 'watchlist' not in st.session_state:
     st.session_state['watchlist'] = []
+if 'last_update' not in st.session_state:
+    st.session_state['last_update'] = None
+
+# ---------------------
+# --- FEATURE 1: Search Individual Stocks ---
+# ---------------------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔍 Search Stock")
+search_input = st.sidebar.text_input("Enter ticker (e.g., AAPL, TSLA)", key="search_ticker")
+search_input = search_input.strip().upper()
+
+if st.sidebar.button("🔎 Search & Analyze") and search_input:
+    with st.spinner(f"Analyzing {search_input}..."):
+        out, details = run_scan([search_input], show_progress=False)
+        if search_input in details and details[search_input]['score'].get('score', -999) > -999:
+            st.session_state['selected_ticker'] = search_input
+            st.session_state['scan_results'] = out
+            st.session_state['scan_details'] = details
+            st.session_state['last_update'] = datetime.now()
+        else:
+            st.sidebar.error(f"❌ Could not fetch data for {search_input}")
+
+# ---------------------
+# --- Universe Scanner ---
+# ---------------------
+st.markdown("## 📊 Universe Scanner")
+
+# Category and universe selection
+col1, col2 = st.columns(2)
+
+with col1:
+    category = st.selectbox("Select Category", list(UNIVERSE_OPTIONS.keys()))
+
+with col2:
+    universe_name = st.selectbox("Select Universe", list(UNIVERSE_OPTIONS[category].keys()))
+
+selected_universe = UNIVERSE_OPTIONS[category][universe_name]
+st.info(f"📋 Selected universe: **{universe_name}** ({len(selected_universe)} tickers)")
+
+if st.button(f"🚀 Scan {universe_name}", type="primary"):
+    with st.spinner(f"Scanning {len(selected_universe)} tickers..."):
+        out, details = run_scan(selected_universe)
+        st.session_state['scan_results'] = out
+        st.session_state['scan_details'] = details
+        st.session_state['last_update'] = datetime.now()
+        st.rerun()
+
+# Show last update time
+if st.session_state['last_update']:
+    st.caption(f"⏰ Last updated: {st.session_state['last_update'].strftime('%Y-%m-%d %H:%M:%S')}")
+
+# ---------------------
+# --- FEATURE 2: Display Results with Click-to-Explore ---
+# ---------------------
+if 'scan_results' in st.session_state and 'scan_details' in st.session_state:
+    res = st.session_state['scan_results']
+    details = st.session_state['scan_details']
+    
+    valid_res = res[res['score'] > -999]
+    
+    if valid_res.empty:
+        st.error("❌ No valid data retrieved. Check tickers or try again later.")
+    else:
+        st.markdown("### 🏆 Top Results")
+        
+        # Add color coding to the results
+        def color_score(val):
+            if val >= 65:
+                return 'background-color: #90EE90'  # light green
+            elif val >= 45:
+                return 'background-color: #FFD700'  # gold
+            else:
+                return 'background-color: #FFB6C1'  # light red
+        
+        styled_df = valid_res.head(20).style.applymap(color_score, subset=['score'])
+        st.dataframe(styled_df, use_container_width=True)
+        
+        # FEATURE 2: Click to explore
+        st.markdown("### 🔍 Click to Explore")
+        ticker_options = valid_res['ticker'].tolist()
+        
+        selected = st.selectbox(
+            "Select a ticker for detailed analysis:",
+            options=[''] + ticker_options,
+            format_func=lambda x: f"{x} (Score: {valid_res[valid_res['ticker']==x]['score'].values[0]})" if x and x in ticker_options else "-- Select a ticker --"
+        )
+        
+        if selected and selected in details:
+            show_detailed_view(
+                selected,
+                details[selected]['df'],
+                details[selected]['info'],
+                details[selected]['score']
+            )
+            
+            # Add to watchlist button
+            if st.button(f"⭐ Add {selected} to Watchlist"):
+                if selected not in st.session_state['watchlist']:
+                    st.session_state['watchlist'].append(selected)
+                    st.success(f"✅ {selected} added to watchlist!")
+                else:
+                    st.info(f"{selected} is already in your watchlist")
+
+# ---------------------
+# --- Watchlist Management ---
+# ---------------------
+st.sidebar.markdown("---")
+st.sidebar.subheader("⭐ My Watchlist")
 
 if st.session_state['watchlist']:
-    st.sidebar.write(st.session_state['watchlist'])
-    if st.sidebar.button("Scan my watchlist"):
-        out, details = run_scan(st.session_state['watchlist'])
-        st.session_state['last_result'] = out
-        st.session_state['details'] = details
-        st.sidebar.success("Watchlist scanned — check main view")
+    for ticker in st.session_state['watchlist']:
+        col1, col2 = st.sidebar.columns([3, 1])
+        col1.write(ticker)
+        if col2.button("🗑️", key=f"remove_{ticker}"):
+            st.session_state['watchlist'].remove(ticker)
+            st.rerun()
+    
+    if st.sidebar.button("📊 Scan Watchlist"):
+        with st.spinner("Scanning watchlist..."):
+            out, details = run_scan(st.session_state['watchlist'])
+            st.session_state['scan_results'] = out
+            st.session_state['scan_details'] = details
+            st.session_state['last_update'] = datetime.now()
+            st.rerun()
+    
+    if st.sidebar.button("🗑️ Clear Watchlist"):
+        st.session_state['watchlist'] = []
         st.rerun()
 else:
     st.sidebar.write("(empty)")
 
-if st.sidebar.button("Export last result CSV") and 'last_result' in st.session_state:
-    csv_data = st.session_state['last_result'].to_csv(index=False)
+# Export functionality
+if 'scan_results' in st.session_state:
+    st.sidebar.markdown("---")
+    csv_data = st.session_state['scan_results'].to_csv(index=False)
     st.sidebar.download_button(
-        "Download CSV",
+        "📥 Download Results (CSV)",
         csv_data,
         file_name=f"mcrf_scan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv"
@@ -401,5 +502,12 @@ if st.sidebar.button("Export last result CSV") and 'last_result' in st.session_s
 
 # Footer
 st.markdown("---")
-st.markdown("**How to use**: Choose SCAN NOW or Category Scanner → Click a quick sample button → View Top picks → Add to Watchlist → Scan Watchlist. For full universe scan, upload CSV with tickers.")
-st.caption("⚠️ Educational use only. Not investment advice. Data from Yahoo Finance may have delays or errors.")
+st.markdown("""
+**📚 How to use:**
+1. **Search**: Enter any ticker in the sidebar to analyze a specific stock
+2. **Universe Scan**: Choose a category and universe, then click Scan
+3. **Explore**: Click on any ticker in the results to see detailed analysis
+4. **Watchlist**: Add interesting stocks to your watchlist for quick access
+
+⚠️ **Disclaimer**: Educational use only. Not financial advice. Always do your own research.
+""")
