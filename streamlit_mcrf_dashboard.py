@@ -19,8 +19,13 @@ from datetime import datetime
 import time
 from typing import List, Dict
 
-st.set_page_config(page_title="MCRF Enhanced Scanner", layout="wide", initial_sidebar_state="expanded")
-
+# Page configuration
+st.set_page_config(
+    page_title="StockSense Pro - Market Analytics",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 # ---------------------
 # --- Utility funcs (same as original) ---
 # ---------------------
@@ -347,8 +352,11 @@ def run_scan(ticker_list: List[str], show_progress=True):
 # ---------------------
 # --- MAIN UI ---
 # ---------------------
-st.title("🚀 MCRF Enhanced Scanner")
-st.markdown("**New Features**: Search stocks • Click to explore • Larger universes • Advanced charts")
+# Header with branding
+st.markdown('<h1 class="main-header">📊 StockSense Pro</h1>', unsafe_allow_html=True)
+st.markdown('<p class="tagline">Intelligent Market Analytics Platform | Built by Wichaya Kanlaya</p>', unsafe_allow_html=True)
+
+#st.markdown("**New Features**: Search stocks • Click to explore • Larger universes • Advanced charts")
 
 # Sidebar
 st.sidebar.title("⚙️ Settings")
@@ -421,29 +429,156 @@ if 'scan_results' in st.session_state and 'scan_details' in st.session_state:
     if valid_res.empty:
         st.error("❌ No valid data retrieved. Check tickers or try again later.")
     else:
+        # NEW: Quick Stats Dashboard
+        st.markdown("### 📊 Scan Summary")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        total_scanned = len(res)
+        strong_signals = len(valid_res[valid_res['score'] >= 65])
+        moderate_signals = len(valid_res[(valid_res['score'] >= 45) & (valid_res['score'] < 65)])
+        weak_signals = len(valid_res[valid_res['score'] < 45])
+        avg_score = valid_res['score'].mean()
+        
+        col1.metric("📈 Total Scanned", total_scanned)
+        col2.metric("🟢 Strong", strong_signals)
+        col3.metric("🟡 Moderate", moderate_signals)
+        col4.metric("🔴 Weak", weak_signals)
+        col5.metric("📊 Avg Score", f"{avg_score:.1f}")
+        
+        st.markdown("---")
         st.markdown("### 🏆 Top Results")
         
-        # Add color coding to the results
-        def color_score(val):
-            if val >= 65:
-                return 'background-color: #90EE90'  # light green
-            elif val >= 45:
-                return 'background-color: #FFD700'  # gold
-            else:
-                return 'background-color: #FFB6C1'  # light red
+        # NEW: Smart Filters
+        col1, col2, col3 = st.columns([2, 2, 1])
         
-        styled_df = valid_res.head(20).style.applymap(color_score, subset=['score'])
-        st.dataframe(styled_df, use_container_width=True)
+        with col1:
+            signal_filter = st.multiselect(
+                "Filter by Signal",
+                options=["🟢 Strong (65+)", "🟡 Moderate (45-65)", "🔴 Weak (<45)"],
+                default=["🟢 Strong (65+)", "🟡 Moderate (45-65)", "🔴 Weak (<45)"]
+            )
         
-        # FEATURE 2: Click to explore
-        st.markdown("### 🔍 Click to Explore")
-        ticker_options = valid_res['ticker'].tolist()
+        with col2:
+            # Get unique sectors from details
+            sectors = set()
+            for ticker in valid_res['ticker']:
+                if ticker in details:
+                    sector = details[ticker]['info'].get('sector', 'Unknown')
+                    if sector and sector != 'Unknown':
+                        sectors.add(sector)
+            
+            sector_filter = st.multiselect(
+                "Filter by Sector",
+                options=sorted(list(sectors)) if sectors else ["All"],
+                default=sorted(list(sectors)) if sectors else ["All"]
+            )
         
-        selected = st.selectbox(
-            "Select a ticker for detailed analysis:",
-            options=[''] + ticker_options,
-            format_func=lambda x: f"{x} (Score: {valid_res[valid_res['ticker']==x]['score'].values[0]})" if x and x in ticker_options else "-- Select a ticker --"
+        with col3:
+            show_count = st.selectbox("Show Top", [10, 20, 50, 100], index=1)
+        
+        # Apply filters
+        filtered_df = valid_res.copy()
+        
+        # Signal filter
+        if "🟢 Strong (65+)" not in signal_filter:
+            filtered_df = filtered_df[filtered_df['score'] < 65]
+        if "🟡 Moderate (45-65)" not in signal_filter:
+            filtered_df = filtered_df[(filtered_df['score'] < 45) | (filtered_df['score'] >= 65)]
+        if "🔴 Weak (<45)" not in signal_filter:
+            filtered_df = filtered_df[filtered_df['score'] >= 45]
+        
+        # Sector filter
+        if sector_filter and sectors:
+            filtered_tickers = []
+            for ticker in filtered_df['ticker']:
+                if ticker in details:
+                    sector = details[ticker]['info'].get('sector', 'Unknown')
+                    if sector in sector_filter or 'All' in sector_filter:
+                        filtered_tickers.append(ticker)
+            filtered_df = filtered_df[filtered_df['ticker'].isin(filtered_tickers)]
+        
+        # Add performance metrics (1-day, 1-week returns)
+        display_df = filtered_df.head(show_count).copy()
+        display_df['signal'] = display_df['score'].apply(
+            lambda x: "🟢 Strong" if x >= 65 else ("🟡 Moderate" if x >= 45 else "🔴 Weak")
         )
+        
+        # Calculate performance metrics
+        performance_data = []
+        for ticker in display_df['ticker']:
+            if ticker in details and not details[ticker]['df'].empty:
+                df = details[ticker]['df']
+                
+                # 1-day return
+                day_return = ((df['Close'].iloc[-1] / df['Close'].iloc[-2]) - 1) * 100 if len(df) >= 2 else 0
+                
+                # 1-week return (5 trading days)
+                week_return = ((df['Close'].iloc[-1] / df['Close'].iloc[-6]) - 1) * 100 if len(df) >= 6 else 0
+                
+                # 1-month return (21 trading days)
+                month_return = ((df['Close'].iloc[-1] / df['Close'].iloc[-22]) - 1) * 100 if len(df) >= 22 else 0
+                
+                sector = details[ticker]['info'].get('sector', 'N/A')
+                
+                performance_data.append({
+                    '1D %': f"{day_return:+.2f}%",
+                    '1W %': f"{week_return:+.2f}%",
+                    '1M %': f"{month_return:+.2f}%",
+                    'Sector': sector
+                })
+            else:
+                performance_data.append({
+                    '1D %': 'N/A',
+                    '1W %': 'N/A',
+                    '1M %': 'N/A',
+                    'Sector': 'N/A'
+                })
+        
+        perf_df = pd.DataFrame(performance_data)
+        
+        # Combine dataframes
+        display_df = display_df[['ticker', 'signal', 'score']].reset_index(drop=True)
+        final_df = pd.concat([display_df, perf_df], axis=1)
+        
+        st.dataframe(final_df, use_container_width=True, hide_index=True)
+        
+        # FEATURE 2: Click to explore with better layout
+        st.markdown("---")
+        st.markdown("### 🔍 Detailed Analysis")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            ticker_options = filtered_df['ticker'].tolist() if not filtered_df.empty else valid_res['ticker'].tolist()
+            
+            # Create better formatted options with emoji indicators
+            def format_ticker_option(ticker):
+                if not ticker:
+                    return "-- Select a ticker to analyze --"
+                score_df = filtered_df if not filtered_df.empty else valid_res
+                score = score_df[score_df['ticker']==ticker]['score'].values[0] if ticker in score_df['ticker'].values else 0
+                emoji = "🟢" if score >= 65 else ("🟡" if score >= 45 else "🔴")
+                return f"{emoji} {ticker} — Score: {score}"
+            
+            selected = st.selectbox(
+                "Choose a ticker for in-depth analysis:",
+                options=[''] + ticker_options,
+                format_func=format_ticker_option
+            )
+        
+        with col2:
+            if selected and selected in details:
+                if st.button(f"⭐ Add {selected} to Watchlist", use_container_width=True):
+                    if selected not in st.session_state['watchlist']:
+                        st.session_state['watchlist'].append(selected)
+                        st.success(f"✅ Added!")
+                    else:
+                        st.info(f"Already in watchlist")
+                
+                # Quick actions
+                info = details[selected]['info']
+                if info.get('website'):
+                    st.link_button("🌐 Company Website", info['website'], use_container_width=True)
         
         if selected and selected in details:
             show_detailed_view(
@@ -452,14 +587,6 @@ if 'scan_results' in st.session_state and 'scan_details' in st.session_state:
                 details[selected]['info'],
                 details[selected]['score']
             )
-            
-            # Add to watchlist button
-            if st.button(f"⭐ Add {selected} to Watchlist"):
-                if selected not in st.session_state['watchlist']:
-                    st.session_state['watchlist'].append(selected)
-                    st.success(f"✅ {selected} added to watchlist!")
-                else:
-                    st.info(f"{selected} is already in your watchlist")
 
 # ---------------------
 # --- Watchlist Management ---
