@@ -8,7 +8,7 @@ NEW AI/ML FEATURES:
 2. ML Price Prediction (Random Forest)
 3. Top 7 AI Picks (Daily recommendations)
 
-Built by Wichaya Kanlaya
+Built by JK404
 """
 
 import streamlit as st
@@ -31,7 +31,7 @@ import os
 st.set_page_config(page_title="StockSense Pro ML", page_icon="🤖", layout="wide")
 
 st.title("🤖 StockSense Pro - AI Edition")
-st.markdown("**Data. Insight. Impact.** | Built by Wichaya Kanlaya | *Powered by Machine Learning*")
+st.markdown("**Data. Insight. Impact.** | Built by JK404 | *Powered by Machine Learning*")
 st.markdown("---")
 
 # ========================================
@@ -642,5 +642,5 @@ with tab3:
 
 # Footer
 st.markdown("---")
-st.markdown("**StockSense Pro ML Edition** | Built by Wichaya Kanlaya | Powered by Machine Learning & AI")
+st.markdown("**StockSense Pro ML Edition** | Built by JK404 | Powered by Machine Learning & AI")
 st.caption("⚠️ Educational use only. Not financial advice. ML predictions are probabilistic, not certain.")
