@@ -121,7 +121,7 @@ Result: 0-100 scale
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/stocksense-pro.git
+git clone
 cd stocksense-pro
 
 # Install dependencies
